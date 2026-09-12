@@ -136,6 +136,29 @@ function walk(dir, acc = []) {
     console.log(`features: ${features.features.length} from ${features.taggedCommits}/${features.totalCommits} commits`);
   }
 
+  // Backups + command log, read-only, the same shape the extension sends.
+  const bk = require("../out/backups");
+  let backupsPayload = null;
+  if (repo) {
+    const gitDir = await bk.gitDirOf(repo);
+    const list = await bk.listBackups(repo);
+    const status = await bk.hookStatus(repo);
+    backupsPayload = {
+      available: true,
+      enabled: status.prePush === "installed" || status.postCommit === "installed",
+      branch: bk.BACKUP_BRANCH,
+      intervalMinutes: 10,
+      lastBackupAt: list.length ? list[0].t : null,
+      nextBackupAt: null,
+      hooks: status,
+      manualInstructions: bk.manualHookInstructions(),
+      terminalCapture: true,
+      backups: list.map((b) => ({ ...b, commands: bk.restoreCommands(b.sha) })),
+      timeline: bk.buildTimeline(list, await bk.readReflog(repo), bk.readEvents(gitDir)),
+    };
+    console.log(`backups: ${list.length}, timeline events: ${backupsPayload.timeline.length}`);
+  }
+
   const scan = await scanDatabaseSchemas(root);
   const schema = {
     tables: scan.schemas.map((t) => ({
@@ -154,7 +177,7 @@ function walk(dir, acc = []) {
 
   const html = buildStandaloneHtml(
     template,
-    { type: "graph", nodes, edges, summary, schema, features, protocol: PROTOCOL_VERSION, version: "preview" },
+    { type: "graph", nodes, edges, summary, schema, features, backups: backupsPayload, protocol: PROTOCOL_VERSION, version: "preview" },
     new Date().toLocaleString(),
   );
 

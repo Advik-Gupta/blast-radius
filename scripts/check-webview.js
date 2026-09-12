@@ -767,6 +767,150 @@ async function buildPayload() {
   check("untagged repo lists recent untagged commits", doc.getElementById("featureDetail").textContent.includes("added readme"), true);
   click(doc.querySelector('.tab[data-tab="graph"]'));
 
+  // ---------------- backups + commands ----------------
+  const now = Date.now();
+  const mkCmds = (sha) => ({
+    preview: `git diff --stat ${sha.slice(0, 12)} -- :/`,
+    restore: `sh "$(git rev-parse --absolute-git-dir)/blastradius/backup.sh" pre-restore "x" && git restore --source=${sha.slice(0, 12)} --staged --worktree -- :/`,
+    exact: `... && git clean -fd -- :/`,
+    file: `git restore --source=${sha.slice(0, 12)} -- <path>`,
+  });
+  const bOld = { sha: "b0000000000000000000000000000000000000001", t: now - 3600e3, trigger: "interval", head: "aaaa1111ffff", branch: "main",
+    headSubject: "feature: get users from db", uncommittedFiles: 2, note: "", author: "Ada", filesChanged: 3, insertions: 10, deletions: 1,
+    feature: { key: "title:get users from db", name: "get users from db", type: "feature" } };
+  const bNew = { sha: "b0000000000000000000000000000000000000002", t: now - 60e3, trigger: "commit", head: "cccc3333ffff", branch: "main",
+    headSubject: "fix(billing): rounding", uncommittedFiles: 0, note: "", author: "Sam", filesChanged: 1, insertions: 2, deletions: 2,
+    feature: { key: "scope:billing", name: "billing", type: "bug fix" } };
+  const sampleBackups = {
+    available: true, enabled: true, branch: "blastradiusbackups", intervalMinutes: 10,
+    lastBackupAt: bNew.t, nextBackupAt: now + 540e3,
+    hooks: { hooksDir: "/r/.git/hooks", managedExternally: false, prePush: "installed", postCommit: "installed", chained: ["pre-push"], scriptsPresent: true },
+    manualInstructions: "# add to your pre-push hook", terminalCapture: true,
+    backups: [Object.assign({ commands: mkCmds(bNew.sha) }, bNew), Object.assign({ commands: mkCmds(bOld.sha) }, bOld)],
+    timeline: [
+      { t: now - 60e3, source: "backup", title: "backup (commit)", detail: "main @ cccc3333", who: "Sam", risk: "safe", why: "",
+        sha: bNew.head, subject: bNew.headSubject, feature: bNew.feature, restorePoint: null, backupSha: bNew.sha },
+      { t: now - 1800e3, source: "terminal", title: "git reset --hard HEAD~3", detail: "/r", who: "Priya <p@x>", risk: "destructive",
+        why: "discards uncommitted changes and can drop commits", exitCode: 0, feature: null,
+        restorePoint: { sha: bOld.sha, t: bOld.t } },
+      { t: now - 1700e3, source: "terminal", title: "git push --force origin main", detail: "/r", who: "Priya <p@x>", risk: "rewrite",
+        why: "rewrites history on the remote", exitCode: 1, feature: null, restorePoint: { sha: bOld.sha, t: bOld.t } },
+      { t: now - 2400e3, source: "reflog", title: "commit: feature: get users from db", detail: "", who: "Ada <a@x>", risk: "safe", why: "",
+        sha: "aaaa1111ffff", subject: "feature: get users from db", feature: bOld.feature, restorePoint: { sha: bOld.sha, t: bOld.t } },
+      { t: now - 3600e3, source: "backup", title: "backup (interval)", detail: "", who: "Ada", risk: "safe", why: "",
+        sha: bOld.head, subject: bOld.headSubject, feature: bOld.feature, restorePoint: null, backupSha: bOld.sha },
+      { t: now - 5000e3, source: "push-guard", title: "push to origin - backup branch withheld", detail: "every other ref was pushed",
+        who: "", risk: "safe", why: "", feature: null, restorePoint: null },
+    ],
+  };
+
+  // a fresh, non-standalone page, so the host-dependent buttons exist
+  const postedB = [];
+  const domB = new JSDOM(html, { runScripts: "outside-only", pretendToBeVisual: true });
+  const wB = domB.window;
+  wB.d3 = require("d3");
+  applyDomShims(wB);
+  wB.acquireVsCodeApi = () => ({ postMessage: (m) => postedB.push(m) });
+  global.window = wB; global.document = wB.document; global.SVGElement = wB.SVGElement;
+  wB.eval(script);
+  wB.dispatchEvent(new wB.MessageEvent("message", { data: Object.assign({}, payload, { protocol: PROTOCOL_VERSION }) }));
+  await new Promise((r) => setTimeout(r, 250));
+  const dB = wB.document;
+  const clickB = (el) => el.dispatchEvent(new wB.MouseEvent("click", { bubbles: true }));
+
+  clickB(dB.querySelector('.tab[data-tab="backups"]'));
+  check("BACKUPS tab activates", dB.getElementById("view-backups").classList.contains("on"), true);
+  check("opening BACKUPS asks the host for data", postedB.some((m) => m.type === "backups"), true);
+
+  // disabled state first
+  wB.dispatchEvent(new wB.MessageEvent("message", { data: Object.assign({}, payload, {
+    protocol: PROTOCOL_VERSION,
+    backups: Object.assign({}, sampleBackups, { enabled: false, backups: [], timeline: [] }),
+  }) }));
+  await new Promise((r) => setTimeout(r, 150));
+  check("disabled repo explains what enabling does", dB.getElementById("backupList").textContent.includes("pre-push hook"), true);
+  clickB(dB.getElementById("backupsEnable"));
+  check("TURN ON posts backupsEnable", postedB.some((m) => m.type === "backupsEnable"), true);
+
+  wB.dispatchEvent(new wB.MessageEvent("message", { data: Object.assign({}, payload, { protocol: PROTOCOL_VERSION, backups: sampleBackups }) }));
+  await new Promise((r) => setTimeout(r, 150));
+  check("backup cards render", dB.querySelectorAll("#backupList .bcard").length, 2);
+  check("status shows the push guard is installed", dB.querySelector("#backupList .bstatus").textContent.includes("push guard: installed"), true);
+  check("status mentions the chained hook", dB.querySelector("#backupList .bstatus").textContent.includes("pre-push hook still runs"), true);
+  clickB(dB.getElementById("backupNow"));
+  check("BACK UP NOW posts backupNow", postedB.some((m) => m.type === "backupNow"), true);
+
+  clickB(dB.querySelector(`#backupList .bcard[data-sha="${bOld.sha}"]`));
+  const bd = dB.getElementById("backupDetail").textContent;
+  check("detail offers a read-only preview", bd.includes("git diff --stat"), true);
+  check("detail offers the recommended restore", bd.includes("git restore --source=") && bd.includes("pre-restore"), true);
+  check("detail warns about exact restore", bd.includes("Deletes untracked files"), true);
+  check("detail lists what happened after the backup", bd.includes("git reset --hard HEAD~3"), true);
+
+  // copy falls back to the host clipboard when the page cannot copy itself
+  const copyBtn = dB.querySelector("#backupDetail .copy");
+  clickB(copyBtn);
+  await new Promise((r) => setTimeout(r, 50));
+  check("COPY reaches a clipboard", postedB.some((m) => m.type === "copy" && m.text.includes("git diff --stat")) || copyBtn.textContent === "COPIED", true);
+
+  // feature chip on a backup opens that feature
+  wB.dispatchEvent(new wB.MessageEvent("message", { data: Object.assign({}, payload, { protocol: PROTOCOL_VERSION, features: sampleFeatures, backups: sampleBackups }) }));
+  await new Promise((r) => setTimeout(r, 100));
+  clickB(dB.querySelector('.tab[data-tab="backups"]'));
+  clickB(dB.querySelector('#backupList .featlink[data-feature="scope:billing"]'));
+  check("feature chip jumps to FEATURES", dB.getElementById("view-features").classList.contains("on"), true);
+  check("...with that feature open", dB.getElementById("featureDetail").textContent.includes("rounding"), true);
+
+  // commands timeline
+  clickB(dB.querySelector('.tab[data-tab="commands"]'));
+  check("COMMANDS tab activates", dB.getElementById("view-commands").classList.contains("on"), true);
+  check("timeline renders every event", dB.querySelectorAll("#commandList .tl").length, sampleBackups.timeline.length);
+  check("summary counts destructive events", dB.querySelector("#commandList .fsummary").textContent.includes("2 destructive"), true);
+  check("destructive commands are labelled", dB.getElementById("commandList").textContent.includes("DESTRUCTIVE"), true);
+  check("failed commands show their exit code", !!dB.querySelector("#commandList .exitbad"), true);
+  check("the limits of capture are stated", dB.getElementById("commandList").textContent.includes("cannot be seen by git"), true);
+
+  clickB(dB.getElementById("riskyOnly"));
+  check("RISKY ONLY keeps just risky events", dB.querySelectorAll("#commandList .tl").length, 2);
+  clickB(dB.getElementById("riskyOnly"));
+
+  const csearch = dB.getElementById("commandSearch");
+  csearch.value = "Priya";
+  csearch.dispatchEvent(new wB.Event("input", { bubbles: true }));
+  check("command search finds who ran what", dB.querySelectorAll("#commandList .tl").length, 2);
+  csearch.value = "";
+  csearch.dispatchEvent(new wB.Event("input", { bubbles: true }));
+
+  clickB(dB.querySelector('#sourceChips .typechip[data-source="terminal"]'));
+  check("source chips filter", [...dB.querySelectorAll("#commandList .srcbadge")].every((b) => b.textContent !== "TERMINAL"), true);
+  clickB(dB.querySelector('#sourceChips .typechip[data-source="terminal"]'));
+
+  // the reset links to the backup from before it
+  const restoreLink = [...dB.querySelectorAll("#commandList .jump[data-backup]")].find((el) => el.textContent.includes("backup b0000000"));
+  check("risky command offers its restore point", !!restoreLink, true);
+  clickB(restoreLink);
+  check("restore point jumps to BACKUPS", dB.getElementById("view-backups").classList.contains("on"), true);
+  check("...with that backup selected", !!dB.querySelector(`#backupList .bcard.on[data-sha="${bOld.sha}"]`), true);
+
+  // features interweave: restore points inside a feature
+  clickB(dB.querySelector('.tab[data-tab="features"]'));
+  clickB(dB.querySelector('#featureList .fcard[data-key="title:get users from db"]'));
+  check("feature lists restore points from its commits", dB.getElementById("featureDetail").textContent.includes("RESTORE POINTS FROM THIS FEATURE"), true);
+  clickB(dB.querySelector("#featureDetail .jump[data-backup]"));
+  check("feature restore point opens the backup", !!dB.querySelector(`#backupList .bcard.on[data-sha="${bOld.sha}"]`), true);
+
+  // core.hooksPath: the missing guard must be loud
+  wB.dispatchEvent(new wB.MessageEvent("message", { data: Object.assign({}, payload, {
+    protocol: PROTOCOL_VERSION,
+    backups: Object.assign({}, sampleBackups, { hooks: Object.assign({}, sampleBackups.hooks, { managedExternally: true, prePush: "missing" }) }),
+  }) }));
+  await new Promise((r) => setTimeout(r, 100));
+  clickB(dB.querySelector('.tab[data-tab="backups"]'));
+  check("core.hooksPath warns the guard is not installed", dB.getElementById("backupList").textContent.includes("PUSH GUARD NOT INSTALLED"), true);
+  check("...and shows the lines to add", dB.getElementById("backupList").textContent.includes("add to your pre-push hook"), true);
+
+  global.window = window; global.document = window.document; global.SVGElement = window.SVGElement;
+
   // ---------------- expandable git history ----------------
   click(doc.querySelector('.tab[data-tab="git"]'));
   const gitRow = doc.querySelector("#gitTable tbody tr[data-id]");

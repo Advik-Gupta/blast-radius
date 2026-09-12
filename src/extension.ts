@@ -20,6 +20,7 @@ import {
 } from "./indexer";
 import { RiskService } from "./risk";
 import { detectDatabaseSchemas, schemaDiagramHtml } from "./schema";
+import { BackupsController } from "./backupsController";
 import { GraphPanel, openInBrowser } from "./webview";
 
 /** Every dialect the bundled grammars can parse. */
@@ -37,6 +38,7 @@ const LANGUAGES = [
 ];
 
 const graph = new CallGraph();
+let backupsController: BackupsController;
 let risk: RiskService;
 let lensProvider: RiskCodeLensProvider;
 let output: vscode.OutputChannel;
@@ -57,6 +59,15 @@ export async function activate(
   log("activating…");
 
   risk = new RiskService(graph);
+
+  // Local backups: opt-in per repository, resumed automatically once enabled.
+  backupsController = new BackupsController(context, (m) => log(m));
+  GraphPanel.backups = backupsController;
+  context.subscriptions.push(
+    backupsController,
+    backupsController.onDidChange(() => GraphPanel.refreshBackups()),
+  );
+  void backupsController.start();
   lensProvider = new RiskCodeLensProvider(graph, risk);
 
   const selector = LANGUAGES.map((language) => ({ language, scheme: "file" }));
@@ -98,6 +109,9 @@ export async function activate(
       }
     }),
     vscode.commands.registerCommand("blastradius.tagCommit", tagCommitMessage),
+    vscode.commands.registerCommand("blastradius.backupsEnable", () => backupsController.enable()),
+    vscode.commands.registerCommand("blastradius.backupsDisable", () => backupsController.disable()),
+    vscode.commands.registerCommand("blastradius.backupNow", () => backupsController.backupNow("manual", "manual backup")),
     vscode.commands.registerCommand("blastradius.showSchemas", async () => {
       GraphPanel.toggleSchema();
     }),

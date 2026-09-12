@@ -15,6 +15,7 @@ import { RiskService, tierFor } from "./risk";
 import { inferSchemaRelations, scanDatabaseSchemas } from "./schema";
 import { buildFeatures, FeaturesPayload, FunctionRef, RawCommit, readCommits } from "./features";
 import { findRepoRoot } from "./git";
+import type { BackupsController, BackupsPayload } from "./backupsController";
 import { PROTOCOL_VERSION } from "./protocol";
 import { buildStandaloneHtml } from "./standalone";
 
@@ -54,6 +55,8 @@ export class GraphPanel {
   /** Raw commit log, read once per request - rebuilding features from it is cheap. */
   private featureCommits: RawCommit[] | null = null;
   private featuresRequested = false;
+  private backupsRequested = false;
+  private backupsData: BackupsPayload | null = null;
   private featuresError: string | undefined;
 
   /** Function the user clicked in a CodeLens, to select once the page is up. */
@@ -83,6 +86,17 @@ export class GraphPanel {
   }
 
   /** Push fresh data into an already-open panel (after a save or re-index). */
+  /** Set by the extension on activation. */
+  static backups: BackupsController | undefined;
+
+  /** Push fresh backup data into an open panel that has asked for it. */
+  static refreshBackups(): void {
+    const panel = GraphPanel.current;
+    if (panel && panel.backupsRequested) {
+      void panel.loadBackups();
+    }
+  }
+
   static refresh(): void {
     GraphPanel.current?.update();
   }
@@ -108,7 +122,7 @@ export class GraphPanel {
     this.panel.onDidDispose(() => this.dispose(), undefined, this.disposables);
   }
 
-  private onMessage(msg: { type: string; id?: string }): void {
+  private onMessage(msg: { type: string; id?: string; text?: string; force?: boolean }): void {
     if (msg.type === "ready") {
       this.ready = true;
       this.update();
@@ -126,8 +140,29 @@ export class GraphPanel {
       void this.showSchemaView();
       return;
     }
+    if (msg.type === "backups") {
+      void this.loadBackups();
+      return;
+    }
+    if (msg.type === "backupsEnable") {
+      void GraphPanel.backups?.enable();
+      return;
+    }
+    if (msg.type === "backupsDisable") {
+      void GraphPanel.backups?.disable();
+      return;
+    }
+    if (msg.type === "backupNow") {
+      void GraphPanel.backups?.backupNow("manual", "manual backup");
+      return;
+    }
+    if (msg.type === "copy" && typeof msg.text === "string") {
+      void vscode.env.clipboard.writeText(msg.text);
+      vscode.window.showInformationMessage("Blast Radius: command copied - paste it into a terminal at the repository.");
+      return;
+    }
     if (msg.type === "features") {
-      void this.loadFeatures(!!(msg as { force?: boolean }).force);
+      void this.loadFeatures(!!msg.force);
     }
   }
 
@@ -136,6 +171,15 @@ export class GraphPanel {
    * functions each feature touched is recomputed on every update, so features
    * fill in as per-function git history finishes loading in the background.
    */
+  private async loadBackups(): Promise<void> {
+    if (!this.ready || !GraphPanel.backups) {
+      return;
+    }
+    this.backupsRequested = true;
+    this.backupsData = await GraphPanel.backups.snapshot();
+    this.update();
+  }
+
   private async loadFeatures(force: boolean): Promise<void> {
     if (!this.ready) {
       return;
@@ -195,6 +239,7 @@ export class GraphPanel {
       version: this.context.extension?.packageJSON?.version ?? "dev",
       viewMode: this.schemaVisible ? "schema" : "graph",
       schema: this.schemaData,
+      backups: this.backupsData,
       features: this.featuresRequested
         ? featuresFor(this.graph, this.risk, this.featureCommits || [], this.featuresError)
         : null,
@@ -382,6 +427,7 @@ export async function openInBrowser(
   const payload = {
     ...graphPayload,
     schema: await collectSchemas(),
+    backups: GraphPanel.backups ? await GraphPanel.backups.snapshot() : null,
     features: await (async () => {
       const read = await readFeatureCommits();
       return featuresFor(graph, risk, read.commits, read.error);
