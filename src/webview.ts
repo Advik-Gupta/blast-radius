@@ -38,6 +38,7 @@ interface WireNode {
     lastChange: number | null;
     /** Recent commits touching this function, for the GIT tab's charts and history. */
     commits: { hash: string; email: string; name: string; t: number; subject: string }[];
+    testRefs: { file: string; line: number; name: string }[];
     gitResolved: boolean;
   };
 }
@@ -102,7 +103,7 @@ export class GraphPanel {
     this.panel.onDidDispose(() => this.dispose(), undefined, this.disposables);
   }
 
-  private onMessage(msg: { type: string; id?: string }): void {
+  private onMessage(msg: { type: string; id?: string; file?: string; line?: number }): void {
     if (msg.type === "ready") {
       this.ready = true;
       this.update();
@@ -110,6 +111,10 @@ export class GraphPanel {
     }
     if (msg.type === "reveal" && msg.id) {
       this.reveal(msg.id);
+      return;
+    }
+    if (msg.type === "revealTest" && msg.file) {
+      void this.revealTest(msg.file, msg.line);
       return;
     }
     if (msg.type === "browser") {
@@ -152,6 +157,21 @@ export class GraphPanel {
     const range = new vscode.Range(node.startLine, 0, node.endLine, 0);
     editor.selection = new vscode.Selection(range.start, range.start);
     editor.revealRange(range, vscode.TextEditorRevealType.InCenter);
+  }
+
+  /** Open a test case referenced by a function's coverage findings. */
+  private async revealTest(file: string, line?: number): Promise<void> {
+    const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(file));
+    const editor = await vscode.window.showTextDocument(doc, {
+      viewColumn: vscode.ViewColumn.One,
+      preserveFocus: false,
+    });
+    if (typeof line === "number") {
+      const start = Math.max(0, line);
+      const range = new vscode.Range(start, 0, start, 0);
+      editor.selection = new vscode.Selection(range.start, range.start);
+      editor.revealRange(range, vscode.TextEditorRevealType.InCenter);
+    }
   }
 
   /** Serialize the current graph + risk data and send it to the page. */
@@ -275,6 +295,7 @@ export function serializeGraph(
         authors: info.authors,
         lastChange: info.lastChange,
         commits: info.commits,
+        testRefs: info.testRefs,
         gitResolved: info.gitResolved,
       },
     });

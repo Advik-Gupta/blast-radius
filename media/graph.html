@@ -1032,6 +1032,29 @@ window.addEventListener('error', function (e) {
         if (n) { select(n, true); centerOn(n); }
       });
     });
+
+    if (d.risk && d.risk.testRefs && d.risk.testRefs.length) {
+      var testHtml = '<div class="card" style="margin-top:10px">' +
+        '<div class="cardhead">RELATED TESTS</div>' +
+        d.risk.testRefs.map(function (ref) {
+          return '<div class="row" data-test-file="' + esc(ref.file) + '" data-test-line="' + esc(String(ref.line || 0)) + '">' +
+            '<i class="swatch" style="background:var(--gb-green)"></i>' +
+            '<span class="nm">' + esc(ref.name) + '</span>' +
+            '<span class="sc">OPEN</span></div>';
+        }).join('') + '</div>';
+      var afterRel = document.createElement('div');
+      afterRel.innerHTML = testHtml;
+      $('entry').appendChild(afterRel.firstElementChild);
+      $('entry').querySelectorAll('[data-test-file]').forEach(function (row) {
+        row.addEventListener('click', function () {
+          vscode.postMessage({
+            type: 'revealTest',
+            file: row.dataset.testFile,
+            line: Number(row.dataset.testLine || 0)
+          });
+        });
+      });
+    }
   }
 
   function totalCommits(r) {
@@ -1131,6 +1154,7 @@ window.addEventListener('error', function (e) {
     var cov = r.coveragePct === null ? 0 : r.coveragePct;
     var lead = (r.authors && r.authors.length) ? r.authors[0] : null;
     var tip = $('tip');
+    var refs = (d.risk && d.risk.testRefs) || [];
     tip.innerHTML =
       '<h4>' + esc(d.name) + '</h4>' +
       '<span class="badge" style="background:' + TIER_COLOR[d.tier] + (d.tier === 'critical' ? ';color:#fff' : '') +
@@ -1143,6 +1167,7 @@ window.addEventListener('error', function (e) {
       tipBar('CHURN 90D', r.churnCount, maxOf(function (n) { return n.risk.churnCount; }), String(r.churnCount), 'var(--yellow)') +
       tipBar('BUS', r.busFactor, 5, String(r.busFactor), r.busFactor <= 1 ? 'var(--fire)' : 'var(--grass)') +
       (lead ? '<div style="margin-top:6px">LEAD: ' + esc(lead.name) + ' (' + lead.commits + ')</div>' : '') +
+      (refs.length ? '<div style="margin-top:8px;color:var(--muted)">TESTS: ' + refs.length + '</div>' : '') +
       '<div class="acts">' +
         '<button class="btn" data-act="lineage">LINEAGE</button>' +
         '<button class="btn" data-act="git">GIT HISTORY</button>' +
